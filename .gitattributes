@@ -1,0 +1,4 @@
+data/HAM10000_images_part_1/*.jpg filter=lfs diff=lfs merge=lfs -text
+data/HAM10000_images_part_2/*.jpg filter=lfs diff=lfs merge=lfs -text
+data/HAM10000_images_part_1/* filter=lfs diff=lfs merge=lfs -text
+data/HAM10000_images_part_2/* filter=lfs diff=lfs merge=lfs -text
