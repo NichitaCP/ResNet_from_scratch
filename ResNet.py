@@ -121,4 +121,6 @@ def test():
     print(f"net_101 Expected shape: (2,50) | Actual shape: {y_101.shape}")
     print(f"net_152 Expected shape: (2,1000) | Actual shape: {y_152.shape}")
 
-test()
+def main():
+    if __name__ == "__main__":
+        test()
