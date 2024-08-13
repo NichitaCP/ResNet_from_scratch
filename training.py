@@ -1,24 +1,16 @@
 import pandas as pd
-import matplotlib.pyplot as plt
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 from torch import nn
 from torchmetrics import Accuracy
-import numpy as np
 import os
 from sklearn.model_selection import train_test_split
-import seaborn as sns
-import plotly.express as px
-import warnings
-from PIL import Image
 from torchvision.transforms import v2
 import random
-from torchinfo import summary
-from typing import Tuple
 from tqdm.auto import tqdm
 from fn_utils import HAM10kCustom
 from ResNet import res_net_50, res_net_101, res_net_152
-from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, OneCycleLR
 import torch.cuda.amp as amp
 
 ################################################################################################
@@ -35,7 +27,7 @@ X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.
 # Transformers and Data Augmentation
 train_transforms = v2.Compose([
     v2.Resize(size=(196, 196)),
-    v2.TrivialAugmentWide(num_magnitude_bins=75),
+    v2.TrivialAugmentWide(num_magnitude_bins=45),
     v2.ToImage(),
     v2.ToDtype(torch.float32, scale=True),
     v2.RandomErasing(p=0.1)
@@ -51,14 +43,14 @@ test_transforms = v2.Compose([
 
 # LR scheduler, Weight Decay and Label Smoothing
 
-lr = 1e-2
-lr_scheduler = 'cosineannealinglr'
+lr = 1e-4
+# lr_scheduler = 'cosineannealinglr'
 lr_warm_epochs = 3
 lr_warm_method = 'linear'
 lr_warm_decay = 0.01
 label_smoothing = 0.1
-weight_decay = 5e-03  # Original suggested value 2e-05
-long_training_epochs = 100  # Pytorch suggests 600 epochs, but that would require > 6 hours of training
+weight_decay = 5e-04  # Original suggested value 2e-05
+long_training_epochs = 250  # Pytorch suggests 600 epochs, but that would require > 6 hours of training
 
 ################################################################################################
 
@@ -67,6 +59,19 @@ val_data = HAM10kCustom(X_val, y_val, test_transforms)
 test_data = HAM10kCustom(X_test, y_test, test_transforms)
 
 ################################################################################################
+
+
+def create_sampled_dataloader(original_dataloader, num_samples, batch_size, num_workers, shuffle=False):
+
+    total_samples = len(original_dataloader.dataset)
+    sampled_indices = random.sample(range(total_samples), num_samples)
+    sampled_data = Subset(original_dataloader.dataset, sampled_indices)
+    sampled_dataloader = DataLoader(dataset=sampled_data,
+                                    batch_size=batch_size,
+                                    num_workers=num_workers,
+                                    shuffle=shuffle)
+
+    return sampled_dataloader
 
 
 def train_step(model: torch.nn.Module,
@@ -106,7 +111,7 @@ def train_step(model: torch.nn.Module,
 def test_step(model: torch.nn.Module,
               dataloader: torch.utils.data.DataLoader,
               loss_function: torch.nn.Module,
-              scaler: amp.GradScaler,
+              scaler: amp.GradScaler=None,
               compute_accuracy: bool = True,
               device_: str = "cpu"):
 
@@ -144,7 +149,8 @@ def train(model: torch.nn.Module,
           lr_warmup_epochs: int = 5,
           lr_warmup_decay: float = 0.01,
           iter_max: int = 50,
-          dynamic_iter_max: bool = False):
+          dynamic_iter_max: bool = False,
+          max_lr=0.5):
 
     scaler = torch.amp.GradScaler()
 
@@ -162,7 +168,16 @@ def train(model: torch.nn.Module,
                "test_acc": []}
 
     lr_scheduler_warmup = LambdaLR(optimizer, lr_lambda=linear_warmup)
-    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=iter_max - lr_warmup_epochs)
+    # cosine_scheduler = CosineAnnealingLR(optimizer, T_max=iter_max - lr_warmup_epochs)
+    one_cycle_scheduler = OneCycleLR(optimizer,
+                                     max_lr=max_lr,
+                                     steps_per_epoch=len(train_dataloader),
+                                     epochs=epochs,
+                                     pct_start=lr_warmup_epochs / epochs,
+                                     anneal_strategy='linear',  # You can use 'linear' if you prefer a linear schedule
+                                     div_factor=25,
+                                     final_div_factor=10000,
+                                     three_phase=False)
 
     for epoch in tqdm(range(epochs)):
         train_loss, train_acc = train_step(model=model,
@@ -183,7 +198,7 @@ def train(model: torch.nn.Module,
         if epoch < lr_warmup_epochs:
             lr_scheduler_warmup.step()
         else:
-            cosine_scheduler.step()
+            one_cycle_scheduler.step()
 
         print(f"\nEpoch: {epoch+1}\n{'-'*20}")
         print(f"Train loss: {train_loss:.3f} | Train acc: {train_acc*100:.2f}%")
@@ -202,13 +217,13 @@ def main():
 
     # Initializing model and DataLoader
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    net_50 = res_net_50(img_channels=3,
-                        num_classes=7,
-                        expansion_factor=4,
-                        block_input_layout=(64, 128, 256, 512)).to(device)
+    net_101 = res_net_101(img_channels=3,
+                          num_classes=7,
+                          expansion_factor=4,
+                          block_input_layout=(64, 128, 256, 512)).to(device)
 
 
-    BATCH_SIZE = 128
+    BATCH_SIZE = 32
     NUM_WORKERS = 0
     train_custom_dataloader = DataLoader(dataset=train_data,
                                          batch_size=BATCH_SIZE,
@@ -227,13 +242,34 @@ def main():
 
     ##############################################################################################
 
+    # Create samples of 2000, 500, 400 for ResNet101, and ResNet152
+    sampled_train_dataloader = create_sampled_dataloader(original_dataloader=train_custom_dataloader,
+                                                         num_samples=2000,
+                                                         batch_size=BATCH_SIZE,
+                                                         num_workers=NUM_WORKERS,
+                                                         shuffle=False)
+
+    sampled_val_dataloader = create_sampled_dataloader(original_dataloader=val_custom_dataloader,
+                                                       num_samples=500,
+                                                       batch_size=BATCH_SIZE,
+                                                       num_workers=NUM_WORKERS,
+                                                       shuffle=False)
+
+    sampled_test_dataloader = create_sampled_dataloader(original_dataloader=test_custom_dataloader,
+                                                        num_samples=400,
+                                                        batch_size=BATCH_SIZE,
+                                                        num_workers=NUM_WORKERS,
+                                                        shuffle=False)
+
+    ##############################################################################################
+
     # Initialize optimizer, loss function and LR Warmup
     torch.manual_seed(25)
     torch.cuda.manual_seed(25)
 
     num_epochs = 100
     loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-    optim = torch.optim.SGD(params=net_50.parameters(),
+    optim = torch.optim.SGD(params=net_101.parameters(),
                             momentum=0.9,
                             weight_decay=weight_decay,
                             lr=lr)
@@ -242,9 +278,9 @@ def main():
 
     # Start training
     
-    training_results = train(model=net_50,
-                             train_dataloader=train_custom_dataloader,
-                             test_dataloader=val_custom_dataloader,
+    training_results = train(model=net_101,
+                             train_dataloader=sampled_train_dataloader,
+                             test_dataloader=sampled_val_dataloader,
                              optimizer=optim,
                              loss_function=loss_fn,
                              epochs=num_epochs,
@@ -252,12 +288,36 @@ def main():
                              lr_warmup_epochs=lr_warm_epochs,
                              lr_warmup_decay=lr_warm_decay,
                              iter_max=25,
-                             dynamic_iter_max=True)
+                             dynamic_iter_max=True,
+                             max_lr=0.1)
 
+    test_loss, test_acc = test_step(model=net_101,
+                                    dataloader=sampled_test_dataloader,
+                                    loss_function=loss_fn,
+                                    device_=device,
+                                    compute_accuracy=True)
+
+    ##############################################################################################
+    # Save state dict
     model_save_dir = os.path.join(os.getcwd(), "models")
+    net_101.name = "ResNet101_org"
     if not os.path.exists(model_save_dir):
         os.mkdir(model_save_dir)
-    torch.save(net_50.state_dict(), os.path.join(model_save_dir, "net_50.pth"))
+    torch.save(net_101.state_dict(), os.path.join(model_save_dir, "net_101.pth"))
+
+    ##############################################################################################
+    # Write results
+
+    train_loss, train_acc = training_results["train_loss"][-1], training_results["train_acc"][-1].item()
+    val_loss, val_acc = training_results["test_loss"][-1], training_results["test_acc"][-1].item()
+
+    with open(f"{net_101.name}.csv", "w") as f:
+        f.write("Train loss,Train accuracy,Validation loss,Validation Accuracy,Test loss, Test Accuracy\n")
+        f.write(f"{train_loss},{train_acc},{val_loss},{val_acc},{test_loss},{test_acc}")
+
+    print(f"Train loss: {train_loss:.3f} | Train ACC: {train_acc * 100:.2f}%")
+    print(f"Val loss: {val_loss:.3f} | Val ACC: {val_acc * 100:.2f}%")
+    print(f"Test loss: {test_loss:.3f} | Test ACC: {test_acc * 100:.2f}%")
 
 
 if __name__ == "__main__":
