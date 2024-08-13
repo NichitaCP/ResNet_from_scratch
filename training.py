@@ -18,6 +18,7 @@ from typing import Tuple
 from tqdm.auto import tqdm
 from fn_utils import HAM10kCustom
 from ResNet import res_net_50, res_net_101, res_net_152
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 
 ################################################################################################
 
@@ -27,8 +28,6 @@ X, y = df["image_path"], df["dx_expanded"]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=25)
 X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25)
 
-labels = list(np.unique(y))
-labels_to_idx = {label:idx for label, idx in zip(labels, list(range(len(labels))))}
 
 ################################################################################################
 
@@ -50,22 +49,27 @@ test_transforms = v2.Compose([
 ################################################################################################
 
 # LR scheduler, Weight Decay and Label Smoothing
-lr = 0.5,
+
+lr = 0.5
 lr_scheduler = 'cosineannealinglr'
-lr_warmup_epochs = 5
-lr_warmup_method = 'linear'
-lr_warmup_decay = 0.01
+lr_warm_epochs = 5
+lr_warm_method = 'linear'
+lr_warm_decay = 0.01
 label_smoothing = 0.1
 weight_decay = 2e-05
 long_training_epochs = 600
 
 ################################################################################################
 
+X_train, X_test, X_val = X_train.reset_index(drop=True), X_test.reset_index(drop=True), X_val.reset_index(drop=True)
+y_train, y_test, y_val = y_train.reset_index(drop=True), y_test.reset_index(drop=True), y_val.reset_index(drop=True)
+
+
 train_data = HAM10kCustom(X_train, y_train, train_transforms)
 val_data = HAM10kCustom(X_val, y_val, test_transforms)
 test_data = HAM10kCustom(X_test, y_test, test_transforms)
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
+# device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cpu"
 ################################################################################################
 
 
@@ -117,7 +121,7 @@ def test_step(model: torch.nn.Module,
 
             if compute_accuracy:
                 accuracy_fn = Accuracy(task="multiclass",
-                                   num_classes=len(train_data.classes)).to(device_)
+                                       num_classes=len(train_data.classes)).to(device_)
                 test_acc += accuracy_fn(test_preds, y_)
 
         test_loss /= len(dataloader)
@@ -125,18 +129,29 @@ def test_step(model: torch.nn.Module,
     return test_loss, test_acc
 
 
-def train(model:torch.nn.Module,
+def train(model: torch.nn.Module,
           train_dataloader: torch.utils.data.DataLoader,
           test_dataloader: torch.utils.data.DataLoader,
           optimizer: torch.optim.Optimizer,
-          loss_function: torch.nn.Module=nn.CrossEntropyLoss(),
+          loss_function: torch.nn.Module = nn.CrossEntropyLoss(),
           epochs: int = 5,
-          device_: "str" = 'cpu'):
+          device_: "str" = 'cpu',
+          lr_warmup_epochs: int = 5,
+          lr_warmup_decay: float = 0.01,
+          iter_max: int = 100):
+
+    def linear_warmup(epoch):
+        if epoch < lr_warmup_epochs:
+            return lr_warmup_decay + (1 - lr_warmup_decay) * epoch / lr_warmup_epochs
+        return 1.0
 
     results = {"train_loss": [],
                "train_acc": [],
                "test_loss": [],
                "test_acc": []}
+
+    lr_scheduler_warmup = LambdaLR(optimizer, lr_lambda=linear_warmup)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=iter_max - lr_warmup_epochs)
 
     for epoch in tqdm(range(epochs)):
         train_loss, train_acc = train_step(model=model,
@@ -152,7 +167,12 @@ def train(model:torch.nn.Module,
                                         device_=device_,
                                         compute_accuracy=True)
 
-        print(f"Epoch: {epoch}\n{'-'*20}")
+        if epoch < lr_warmup_epochs:
+            lr_scheduler_warmup.step()
+        else:
+            cosine_scheduler.step()
+
+        print(f"Epoch: {epoch+1}\n{'-'*20}")
         print(f"Train loss: {train_loss:.3f} | Train acc: {train_acc*100:.2f}%")
         print(f"Test loss: {test_loss:.3f} | Test acc: {test_acc*100:.2f}%")
 
@@ -162,3 +182,57 @@ def train(model:torch.nn.Module,
         results["test_acc"].append(test_acc)
 
     return results
+
+
+################################################################################################
+
+# Initializing model and DataLoader
+net_50_lw = res_net_50(img_channels=3,
+                       num_classes=7,
+                       expansion_factor=2,
+                       block_input_layout=(16, 32, 64, 128)).to(device)
+
+BATCH_SIZE = 64
+NUM_WORKERS = 0
+train_custom_dataloader = DataLoader(dataset=train_data,
+                                     batch_size=BATCH_SIZE,
+                                     num_workers=NUM_WORKERS,
+                                     shuffle=True)
+
+val_custom_dataloader = DataLoader(dataset=val_data,
+                                   batch_size=BATCH_SIZE,
+                                   num_workers=NUM_WORKERS,
+                                   shuffle=False)
+
+test_custom_dataloader = DataLoader(dataset=test_data,
+                                    batch_size=BATCH_SIZE,
+                                    num_workers=NUM_WORKERS,
+                                    shuffle=False)
+
+
+##############################################################################################
+
+# Initialize optimizer, loss function and LR Warmup
+torch.manual_seed(25)
+torch.cuda.manual_seed(25)
+
+NUM_EPOCHS = 100
+loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+optim = torch.optim.SGD(params=net_50_lw.parameters(),
+                        momentum=0.9,
+                        weight_decay=weight_decay,
+                        lr=lr)
+
+##############################################################################################
+
+# Start training
+training_results = train(model=net_50_lw,
+                         train_dataloader=train_custom_dataloader,
+                         test_dataloader=val_custom_dataloader,
+                         optimizer=optim,
+                         loss_function=loss_fn,
+                         epochs=NUM_EPOCHS,
+                         device_=device,
+                         lr_warmup_epochs=lr_warm_epochs,
+                         lr_warmup_decay=lr_warm_decay,
+                         iter_max=25)

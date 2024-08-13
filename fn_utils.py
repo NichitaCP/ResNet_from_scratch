@@ -15,7 +15,7 @@ class HAM10kCustom(Dataset):
         self.y = image_labels.reset_index(drop=True)
         self.classes = np.unique(self.y)
         self.transform = transform
-        self.classes_to_idx = {label: label_idx for label, label_idx in zip(image_labels, list(range(len(image_labels))))}
+        self.classes_to_idx = {label: label_idx for label_idx, label in enumerate(self.classes)}
 
     def load_image(self, index):
         """Opens an image via a path and returns it."""
