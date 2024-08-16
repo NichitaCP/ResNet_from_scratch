@@ -201,7 +201,7 @@ def train(model: torch.nn.Module,
     lr_on_plateau_scheduler = ReduceLROnPlateau(optimizer,
                                                 mode=mode,
                                                 patience=patience,
-                                                cooldown=3)
+                                                cooldown=cooldown)
 
     for epoch in tqdm(range(epochs)):
         train_loss, train_acc = train_step(model=model,

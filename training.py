@@ -22,18 +22,23 @@ X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.
 
 # Transformers and Data Augmentation
 train_transforms = v2.Compose([
-    v2.Resize(size=(64, 64)),
-    v2.RandomHorizontalFlip(p=0.3),
+    v2.Resize(size=(96, 96)),
+    v2.RandomHorizontalFlip(p=0.5),
+    v2.RandomVerticalFlip(p=0.5),
+    v2.RandomRotation(degrees=(-30, 30)),
     v2.TrivialAugmentWide(num_magnitude_bins=35),
+    v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.15),
     v2.ToImage(),
-    v2.ToDtype(torch.float32, scale=True),
-    v2.RandomErasing(p=0.1)
+    v2.ToDtype(torch.float16, scale=True),
+    v2.RandomErasing(p=0.1),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
 test_transforms = v2.Compose([
-    v2.Resize(size=(64, 64)),
+    v2.Resize(size=(96, 96)),
     v2.ToImage(),
-    v2.ToDtype(torch.float32, scale=True)
+    v2.ToDtype(torch.float16, scale=True),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
 ################################################################################################
@@ -63,12 +68,13 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     net_101 = res_net_101(img_channels=3,
                           num_classes=7,
-                          expansion_factor=4,
+                          expansion_factor=6,
                           block_input_layout=(16, 32, 64, 128)).to(device)
 
 
-    BATCH_SIZE = 128
+    BATCH_SIZE = 64
     NUM_WORKERS = 0
+
     train_custom_dataloader = DataLoader(dataset=train_data,
                                          batch_size=BATCH_SIZE,
                                          num_workers=NUM_WORKERS,
@@ -88,19 +94,19 @@ def main():
 
     # Create samples of 3000, 500, 500 for ResNet101, and ResNet152
     sampled_train_dataloader = create_sampled_dataloader(original_dataloader=train_custom_dataloader,
-                                                         num_samples=3000,
+                                                         num_samples=5000,
                                                          batch_size=BATCH_SIZE,
                                                          num_workers=NUM_WORKERS,
                                                          shuffle=True)
 
     sampled_val_dataloader = create_sampled_dataloader(original_dataloader=val_custom_dataloader,
-                                                       num_samples=500,
+                                                       num_samples=1000,
                                                        batch_size=BATCH_SIZE,
                                                        num_workers=NUM_WORKERS,
                                                        shuffle=False)
 
     sampled_test_dataloader = create_sampled_dataloader(original_dataloader=test_custom_dataloader,
-                                                        num_samples=500,
+                                                        num_samples=1000,
                                                         batch_size=BATCH_SIZE,
                                                         num_workers=NUM_WORKERS,
                                                         shuffle=False)
@@ -111,8 +117,8 @@ def main():
     torch.manual_seed(25)
     torch.cuda.manual_seed(25)
 
-    lr = 0.05
-    num_epochs = 250
+    lr = 0.01
+    num_epochs = 150
     loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     optim = torch.optim.Adam(params=net_101.parameters(),
                              weight_decay=weight_decay,
@@ -130,9 +136,9 @@ def main():
                              epochs=num_epochs,
                              device=device,
                              min_lr=1e-7,
-                             patience=4,
-                             cooldown=2,
-                             lr_warmup_epochs=lr_warm_epochs,
+                             patience=10,
+                             cooldown=5,
+                             lr_warmup_epochs=3,
                              lr_warmup_decay=lr_warm_decay,
                              iter_max=25,
                              dynamic_iter_max=True,
@@ -148,10 +154,10 @@ def main():
     ##############################################################################################
     # Save state dict
     model_save_dir = os.path.join(os.getcwd(), "models")
-    net_101.name = "ResNet101_v2"
+    net_101.name = "ResNet101_v3"
     if not os.path.exists(model_save_dir):
         os.mkdir(model_save_dir)
-    torch.save(net_101.state_dict(), os.path.join(model_save_dir, "net_101_v2.pth"))
+    torch.save(net_101.state_dict(), os.path.join(model_save_dir, "net_101_v3.pth"))
 
     ##############################################################################################
     # Write results
@@ -165,7 +171,7 @@ def main():
 
     with open("epoch_lrs.csv", "w") as f:
         f.write("Epoch,Lr,TrAcc,ValAcc,TrLoss,TestLoss\n")
-        for epoch, lr, tr_acc, val_acc, tr_loss, val_loss in zip(range(1, 100),
+        for epoch, lr, tr_acc, val_acc, tr_loss, val_loss in zip(range(1, num_epochs+1),
                                                                  training_results["lrs"],
                                                                  training_results["train_acc"],
                                                                  training_results["test_acc"],
