@@ -27,7 +27,7 @@ train_transforms = v2.Compose([
     v2.RandomVerticalFlip(p=0.5),
     v2.RandomRotation(degrees=(-30, 30)),
     v2.TrivialAugmentWide(num_magnitude_bins=35),
-    v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.15),
+    v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.15),
     v2.ToImage(),
     v2.ToDtype(torch.float16, scale=True),
     v2.RandomErasing(p=0.1),
@@ -68,8 +68,8 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     net_101 = res_net_101(img_channels=3,
                           num_classes=7,
-                          expansion_factor=6,
-                          block_input_layout=(16, 32, 64, 128)).to(device)
+                          expansion_factor=4,
+                          block_input_layout=(32, 64, 128, 256)).to(device)
 
 
     BATCH_SIZE = 64
@@ -118,7 +118,7 @@ def main():
     torch.cuda.manual_seed(25)
 
     lr = 0.01
-    num_epochs = 150
+    num_epochs = 350
     loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     optim = torch.optim.Adam(params=net_101.parameters(),
                              weight_decay=weight_decay,
@@ -136,7 +136,7 @@ def main():
                              epochs=num_epochs,
                              device=device,
                              min_lr=1e-7,
-                             patience=10,
+                             patience=15,
                              cooldown=5,
                              lr_warmup_epochs=3,
                              lr_warmup_decay=lr_warm_decay,
@@ -144,45 +144,53 @@ def main():
                              dynamic_iter_max=True,
                              num_classes=7)
 
-    test_loss, test_acc = test_step(model=net_101,
-                                    dataloader=sampled_test_dataloader,
-                                    loss_function=loss_fn,
-                                    num_classes=7,
-                                    device=device,
-                                    compute_accuracy=True)
+    test_loss, test_acc, test_recall, test_roc_auc = test_step(model=net_101,
+                                                               dataloader=sampled_test_dataloader,
+                                                               loss_function=loss_fn,
+                                                               num_classes=7,
+                                                               device=device)
 
     ##############################################################################################
     # Save state dict
     model_save_dir = os.path.join(os.getcwd(), "models")
-    net_101.name = "ResNet101_v3"
+    net_101.name = "ResNet101_v5"
     if not os.path.exists(model_save_dir):
         os.mkdir(model_save_dir)
-    torch.save(net_101.state_dict(), os.path.join(model_save_dir, "net_101_v3.pth"))
+    torch.save(net_101.state_dict(), os.path.join(model_save_dir, "net_101_v5.pth"))
 
     ##############################################################################################
     # Write results
 
     train_loss, train_acc = training_results["train_loss"][-1], training_results["train_acc"][-1].item()
+    train_recall = training_results["train_recall"][-1].item()
+    train_roc_auc = training_results["train_roc_auc"][-1].item()
     val_loss, val_acc = training_results["test_loss"][-1], training_results["test_acc"][-1].item()
+    val_recall = training_results["test_recall"][-1].item()
+    val_roc_auc = training_results["test_roc_auc"][-1].item()
 
     with open(f"{net_101.name}.csv", "w") as f:
-        f.write("Train loss,Train accuracy,Validation loss,Validation Accuracy,Test loss, Test Accuracy\n")
-        f.write(f"{train_loss},{train_acc},{val_loss},{val_acc},{test_loss},{test_acc}")
+        f.write("Train loss,Train accuracy,Train recall,Train ROC-AUC, "
+                "Validation loss,Validation Accuracy,Validation Recall,Validation ROC-AUC"
+                "Test loss,Test Accuracy,Test Recall,Test ROC-AUC\n")
+        f.write(f"{train_loss},{train_acc},{train_recall}{train_roc_auc},"
+                f"{val_loss},{val_acc},{val_recall},{val_roc_auc}"
+                f"{test_loss},{test_acc},{test_recall},{test_roc_auc}")
 
     with open("epoch_lrs.csv", "w") as f:
-        f.write("Epoch,Lr,TrAcc,ValAcc,TrLoss,TestLoss\n")
-        for epoch, lr, tr_acc, val_acc, tr_loss, val_loss in zip(range(1, num_epochs+1),
-                                                                 training_results["lrs"],
-                                                                 training_results["train_acc"],
-                                                                 training_results["test_acc"],
-                                                                 training_results["train_loss"],
-                                                                 training_results["test_loss"]):
+        f.write("Epoch,Lr,Trloss,TrAcc,TrRecall,TrROC,ValLoss,ValAcc,ValRecall,ValRoc\n")
+        for epoch in range(num_epochs):
+            line = f"{epoch+1},"
+            for key in training_results.keys():
+                line += f"{training_results[key][epoch]},"
+            line += f"\n".replace(",\n","\n")
+            f.write(line)
 
-            f.write(f"{epoch},{lr},{tr_acc},{val_acc},{tr_loss},{val_loss}\n")
-
-    print(f"Train loss: {train_loss:.3f} | Train ACC: {train_acc * 100:.2f}%")
-    print(f"Val loss: {val_loss:.3f} | Val ACC: {val_acc * 100:.2f}%")
-    print(f"Test loss: {test_loss:.3f} | Test ACC: {test_acc * 100:.2f}%")
+    print(f"Train loss: {train_loss:.3f} | ACC: {train_acc*100:.2f}% | "
+          f" Recall: {train_recall*100:.2f} | AUROC: {train_roc_auc*100:.2f}")
+    print(f"Validation loss: {val_loss:.3f} | ACC: {val_acc * 100:.2f}% | "
+          f" Recall: {val_recall*100:.2f} | AUROC: {val_roc_auc*100:.2f}")
+    print(f"Test loss: {test_loss:.3f} | ACC: {test_acc * 100:.2f}% | "
+          f" Recall: {test_recall*100:.2f} | AUROC: {test_roc_auc*100:.2f}")
 
 
 if __name__ == "__main__":
