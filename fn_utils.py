@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 import torch.cuda.amp as amp
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, OneCycleLR, ReduceLROnPlateau
 from typing import Literal
+from torchvision.transforms import v2
 
 
 class HAM10kCustom(Dataset):
@@ -269,3 +270,24 @@ def train(model: torch.nn.Module,
             results["lrs"].append(optimizer.param_groups[0]['lr'])
 
     return results
+
+
+def classify(image, model, class_names):
+    transform = v2.Compose([
+        v2.Resize(size=(96, 96)),
+        v2.ToImage(),
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    model = model.to("cuda")
+    image = transform(image).unsqueeze(0).to("cuda")
+    model.eval()
+    with torch.inference_mode():
+        outputs = model(image)
+    probabilities = torch.softmax(outputs, dim=1)
+    top_3_probs, top_3_idx = torch.topk(probabilities, k=3, dim=1)
+
+    top_3_classes = [class_names[idx][1] for idx in top_3_idx[0]]
+    top_3_probs = top_3_probs[0].tolist()
+
+    return list(zip(top_3_classes, top_3_probs))
