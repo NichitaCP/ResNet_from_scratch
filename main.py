@@ -12,9 +12,7 @@ file = st.file_uploader("", type=["jpeg", "jpg", "png"])
 # Load model
 net_101 = res_net_101(num_classes=7, block_input_layout=(32, 64, 128, 256))
 net_101_path = os.path.join(os.getcwd(), "models", "net_101_v5.pth")
-net101_state_dict = torch.load(net_101_path, weights_only=False, map_location=torch.device("cpu"))
-net_101.load_state_dict(net101_state_dict, map_location=torch.device('cpu'))
-net_101 = net_101.to("cpu")
+net_101.load_state_dict(torch.load("models/net_101_v5.pth", map_location=torch.device("cpu")))
 
 lesion_type_dict = {
     'nv': 'Melanocytic nevi',
