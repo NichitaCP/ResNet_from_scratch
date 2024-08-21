@@ -7,7 +7,7 @@ This project implements the ResNet architecture from scratch using PyTorch.
 - **Pre-trained Models**: Models available in the `models` folder.
 
 ## To-Do
-- [ ] Retrain models in the `models` folder on longer epochs.
+- [x] Retrain models in the `models` folder on longer epochs.
 - [ ] Deploy the model using Streamlit.
 - [ ] Test the deployed model on new images.
 
