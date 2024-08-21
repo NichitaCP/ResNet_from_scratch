@@ -5,7 +5,7 @@ import random
 import matplotlib.pyplot as plt
 import torch
 from torch import nn
-from torchmetrics import Accuracy
+from torchmetrics import Accuracy, Recall, AUROC
 from tqdm.auto import tqdm
 import torch.cuda.amp as amp
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, OneCycleLR, ReduceLROnPlateau
@@ -91,10 +91,11 @@ def train_step(model: torch.nn.Module,
                scaler: torch.amp.GradScaler,
                device: str = "cpu",
                num_classes: int = 2,
-               compute_accuracy: bool = True):
+               compute_metrics: bool = True):
     model.to(device)
     model.train()
-    train_loss, train_acc = 0, 0 if compute_accuracy else None
+    train_loss, train_acc = 0, 0 if compute_metrics else None
+    train_recall, train_roc_auc = 0, 0 if compute_metrics else None
     for batch, (X_, y_) in enumerate(dataloader):
         X_, y_ = X_.to(device), y_.to(device)
 
@@ -104,10 +105,17 @@ def train_step(model: torch.nn.Module,
 
         train_loss += loss.item()
 
-        if compute_accuracy:
+        if compute_metrics:
             accuracy_fn = Accuracy(task="multiclass",
                                    num_classes=num_classes).to(device)
+            recall_fn = Recall(task="multiclass",
+                               num_classes=num_classes,
+                               average="weighted").to(device)
+            roc_auc_fn = AUROC(task="multiclass",
+                               num_classes=num_classes).to(device)
             train_acc += accuracy_fn(y_pred, y_)
+            train_recall += recall_fn(y_pred, y_)
+            train_roc_auc += roc_auc_fn(y_pred, y_)
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -116,7 +124,9 @@ def train_step(model: torch.nn.Module,
 
     train_loss /= len(dataloader)
     train_acc /= len(dataloader)
-    return train_loss, train_acc
+    train_recall /= len(dataloader)
+    train_roc_auc /= len(dataloader)
+    return train_loss, train_acc, train_recall, train_roc_auc
 
 
 def test_step(model: torch.nn.Module,
@@ -124,12 +134,13 @@ def test_step(model: torch.nn.Module,
               loss_function: torch.nn.Module,
               scaler: amp.GradScaler=None,
               num_classes: int = 2,
-              compute_accuracy: bool = True,
+              compute_metrics: bool = True,
               device: str = "cpu"):
 
     model.to(device)
     model.eval()
-    test_loss, test_acc = 0, 0 if compute_accuracy else None
+    test_loss, test_acc = 0, 0 if compute_metrics else None
+    test_recall, test_roc_auc = 0, 0 if compute_metrics else None
     with torch.inference_mode():
         for batch, (X_, y_) in enumerate(dataloader):
             X_, y_ = X_.to(device), y_.to(device)
@@ -140,15 +151,24 @@ def test_step(model: torch.nn.Module,
 
             test_loss += loss.item()
 
-            if compute_accuracy:
+            if compute_metrics:
                 accuracy_fn = Accuracy(task="multiclass",
                                        num_classes=num_classes).to(device)
+                recall_fn = Recall(task="multiclass",
+                                   num_classes=num_classes,
+                                   average="weighted").to(device)
+                roc_auc_fn = AUROC(task="multiclass",
+                                   num_classes=num_classes).to(device)
                 test_acc += accuracy_fn(test_preds, y_)
+                test_recall += recall_fn(test_preds, y_)
+                test_roc_auc += roc_auc_fn(test_preds, y_)
 
         test_loss /= len(dataloader)
         test_acc /= len(dataloader)
+        test_recall /= len(dataloader)
+        test_roc_auc /= len(dataloader)
 
-    return test_loss, test_acc
+    return test_loss, test_acc, test_recall, test_roc_auc
 
 
 def train(model: torch.nn.Module,
@@ -180,11 +200,15 @@ def train(model: torch.nn.Module,
             return lr_warmup_decay + (1 - lr_warmup_decay) * epoch / lr_warmup_epochs
         return 1.0
 
-    results = {"train_loss": [],
+    results = {"lrs": [],
+               "train_loss": [],
                "train_acc": [],
+               "train_recall": [],
+               "train_roc_auc": [],
                "test_loss": [],
                "test_acc": [],
-               "lrs": []}
+               "test_recall": [],
+               "test_roc_auc": []}
 
     lr_scheduler_warmup = LambdaLR(optimizer, lr_lambda=linear_warmup)
     # cosine_scheduler = CosineAnnealingLR(optimizer, T_max=iter_max - lr_warmup_epochs)
@@ -204,22 +228,22 @@ def train(model: torch.nn.Module,
                                                 cooldown=cooldown)
 
     for epoch in tqdm(range(epochs)):
-        train_loss, train_acc = train_step(model=model,
-                                           dataloader=train_dataloader,
-                                           loss_function=loss_function,
-                                           optimizer=optimizer,
-                                           scaler=scaler,
-                                           device=device,
-                                           num_classes=num_classes,
-                                           compute_accuracy=True)
+        train_loss, train_acc, train_recall, train_roc_auc = train_step(model=model,
+                                                                        dataloader=train_dataloader,
+                                                                        loss_function=loss_function,
+                                                                        optimizer=optimizer,
+                                                                        scaler=scaler,
+                                                                        device=device,
+                                                                        num_classes=num_classes,
+                                                                        compute_metrics=True)
 
-        test_loss, test_acc = test_step(model=model,
-                                        dataloader=test_dataloader,
-                                        loss_function=loss_function,
-                                        device=device,
-                                        num_classes=num_classes,
-                                        scaler=scaler,
-                                        compute_accuracy=True)
+        test_loss, test_acc, test_recall, test_roc_auc = test_step(model=model,
+                                                                   dataloader=test_dataloader,
+                                                                   loss_function=loss_function,
+                                                                   device=device,
+                                                                   num_classes=num_classes,
+                                                                   scaler=scaler,
+                                                                   compute_metrics=True)
 
         if epoch < lr_warmup_epochs:
             lr_scheduler_warmup.step()
@@ -227,13 +251,20 @@ def train(model: torch.nn.Module,
             lr_on_plateau_scheduler.step(metrics=train_loss)
 
         print(f"\nEpoch: {epoch+1} | Current lr: {optimizer.param_groups[0]['lr']}\n{'-'*20}")
-        print(f"Train loss: {train_loss:.3f} | Train acc: {train_acc*100:.2f}%")
-        print(f"Test loss: {test_loss:.3f} | Test acc: {test_acc*100:.2f}%")
+        print(f"Train loss: {train_loss:.3f} | Acc: {train_acc*100:.2f}% |"
+              f" Recall: {train_recall*100:.2f}% | AUROC: {train_roc_auc*100:.2f}%")
+        print(f"Test loss: {test_loss:.3f} | Acc: {test_acc*100:.2f}%"
+              f" Recall: {test_recall*100:.2f}% | AUROC: {test_roc_auc*100:.2f}%")
 
         results["train_loss"].append(train_loss)
         results["train_acc"].append(train_acc)
+        results["train_recall"].append(train_recall)
+        results["train_roc_auc"].append(train_roc_auc)
         results["test_loss"].append(test_loss)
         results["test_acc"].append(test_acc)
+        results["test_recall"].append(test_recall)
+        results["test_roc_auc"].append(test_roc_auc)
+
         if save_lrs:
             results["lrs"].append(optimizer.param_groups[0]['lr'])
 

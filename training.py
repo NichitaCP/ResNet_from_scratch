@@ -11,7 +11,7 @@ from ResNet import res_net_101, res_net_101, res_net_101
 
 ################################################################################################
 
-df = pd.read_csv("skin_cancer_df.csv")
+df = pd.read_csv("/data/skin_cancer_df.csv")
 X, y = df["image_path"], df["dx_expanded"]
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=25)
