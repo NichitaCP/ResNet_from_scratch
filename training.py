@@ -6,7 +6,7 @@ import os
 from sklearn.model_selection import train_test_split
 from torchvision.transforms import v2
 from fn_utils import HAM10kCustom, train_step, test_step, train, create_sampled_dataloader
-from ResNet import res_net_101, res_net_101, res_net_101
+from ResNet import res_net_50, res_net_152, res_net_101
 
 
 ################################################################################################
