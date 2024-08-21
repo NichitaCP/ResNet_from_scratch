@@ -21,9 +21,14 @@ cd ResNet_from_scratch
 ```
 
 ## Accuracy and Confusion Matrix 
-Top-1 Accuracy: 76.12%  
-Top-3 Accuracy: 96.19%
+**Top-1 Accuracy: 76.12%  
+Top-3 Accuracy: 96.19%**
+
+## Confusion Matrix 
 ![Confusion Matrix](plots/Confusion_matrix.jpg)
+
+## Train and Validation result plots
+![Results](plots/train_validation_plots.png)
 
 ## License 
 This project is licensed under the Apache License 2.0. You may use, distribute, and modify this software under the terms of the Apache License. You must include a copy of the license in any significant portions of the software and provide a notice of all changes made.
