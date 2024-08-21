@@ -5,7 +5,7 @@ This project implements the ResNet architecture from scratch using PyTorch.
 ## Features
 - **Customizable ResNet Architecture**: Adjust expansion/dilation factors and feature map sizes.
 - **Pre-trained Models**: Models available in the `models` folder.
-- Live app: https://skinlesiondetection.streamlit.app/
+- **Live app**: https://skinlesiondetection.streamlit.app/
 
 ## To-Do
 - [x] Retrain models in the `models` folder on longer epochs.
