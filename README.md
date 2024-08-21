@@ -1,6 +1,6 @@
 # ResNet from Scratch [WIP] 
 
-This project implements the ResNet architecture from scratch using PyTorch. Initially tested on food classification, achieving 99.3% accuracy, it has been adapted for skin cancer detection.
+This project implements the ResNet architecture from scratch using PyTorch.
 
 ## Features
 - **Customizable ResNet Architecture**: Adjust expansion/dilation factors and feature map sizes.
