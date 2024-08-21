@@ -21,7 +21,7 @@ cd ResNet_from_scratch
 ```
 
 ## Accuracy and Confusion Matrix 
-Top-1 Accuracy: 76.12%
+Top-1 Accuracy: 76.12%  
 Top-3 Accuracy: 96.19%
 ![Confusion Matrix](plots/Confusion_matrix.jpg)
 
