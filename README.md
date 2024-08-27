@@ -1,4 +1,4 @@
-# ResNet from Scratch [WIP] 
+# ResNet from Scratch
 
 This project implements the ResNet architecture from scratch using PyTorch.
 
